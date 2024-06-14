@@ -1,0 +1,195 @@
+i,p,m,s,o = input,property,math,screen,output
+pgn,pgb,gn,gb,sn,pgt = p.getNumber,p.getBool,i.getNumber,i.getBool,o.setNumber,p.getText
+cos = m.cos
+sin = m.sin
+fov = m.tan(m.rad(pgn("fov")) / 2)
+fog2 = pgn("fog") -- fog intensity
+fog = {55, 146, 255, 255} -- fog rgba
+-- Camera variables
+cameraX, cameraY, cameraZ = 0, 0, 5
+cumulativeYaw = 0
+sensitivity = 100
+threshold = 0.01
+speed = 0.1
+--- turns a string into a table.
+-- @param str string - input string
+-- @return ... - output numbers
+--returns numbers in a string with a , seperator
+function text2Num(str) 
+    local nums = {}
+    for num in pgt(str):gmatch("%-?%d*%.?%d+") do
+        nums[#nums + 1] = tonumber(num)
+    end
+    return table.unpack(nums)
+end
+
+local cube = {{text2Num("cube_V")},{text2Num("cube_T")}}
+local mac10 = {{text2Num("Mac10_V")},{text2Num("Mac10_T")}}
+
+function projectModel(model, location, baseColor, rotation)
+    local vertices = model[1]
+    local triangles = model[2]
+    for i = 1, #triangles, 3 do
+        local triangle = {
+            triangles[i],
+            triangles[i + 1],
+            triangles[i + 2]
+        }
+
+        local projectedTriangle = {}
+        for j = 1, 3 do
+            local vertexIndex = triangle[j]
+            local vertex = {
+                vertices[(vertexIndex - 1) * 3 + 1],
+                vertices[(vertexIndex - 1) * 3 + 2],
+                vertices[(vertexIndex - 1) * 3 + 3]
+            }
+            if rotation then
+                -- Apply rotation to the vertex if rotation is not nil
+                vertex = rotatePoint(vertex, rotation)
+            end
+            -- Apply translation to the vertex
+            vertex[1] = vertex[1] + location[1]
+            vertex[2] = vertex[2] + location[2]
+            vertex[3] = vertex[3] + location[3]
+            -- Project the vertex
+            projectedTriangle[j] = projectVertex(vertex)
+        end
+
+        local AvgLiniarDepth = (projectedTriangle[1][3] + projectedTriangle[2][3] + projectedTriangle[3][3]) / 3
+		local AvgEulerDepth = (projectedTriangle[1][4] + projectedTriangle[2][4] + projectedTriangle[3][4]) / 3
+        -- Calculate fog intensity based on depth
+        local fogIntensity = 1 - m.min(1, AvgEulerDepth / fog2)
+
+        -- Adjust color based on fog intensity and base color
+        local color = {}
+        for k = 1, 4 do
+            if baseColor[k] then
+                color[k] = m.floor(baseColor[k] * fogIntensity + fog[k] * (1 - fogIntensity))
+            else
+                color[k] = 255  -- Set to 255 if baseColor[k] is nil
+            end
+        end
+
+        table.insert(allProjectedTriangles, { projectedTriangle[1], projectedTriangle[2], projectedTriangle[3], color, AvgLiniarDepth })
+    end
+end
+
+function projectVertex(vertex)
+    local x, y, z = vertex[1] - cameraX, vertex[2] - cameraY, vertex[3] - cameraZ
+    local rotatedX = x * cameraCosYaw - z * cameraSinYaw
+    local rotatedZ = x * cameraSinYaw + z * cameraCosYaw
+    local rotatedY = y * cameraCosPitch - rotatedZ * cameraSinPitch
+    local depth = y * cameraSinPitch + rotatedZ * cameraCosPitch + 5
+    local depth2 = math.max(0.01, depth)
+    local depth3 = rotatedX^2 + rotatedY^2 + rotatedZ^2  -- Squared magnitude
+    
+    -- Convert to screen coordinates
+    local screenX = ((rotatedX / depth2 / fov / aspectRatio + 1) * w2)
+    local screenY = ((1 - rotatedY / depth2 / fov) * h2)
+
+    return {screenX, screenY, depth / fov / aspectRatio, depth3}
+end
+
+
+
+
+
+-- Rotate a point around Yaw and Pitch axes
+function rotatePoint(point, rotation)
+    x, y, z = point[1], point[2], point[3]
+    yaw, pitch = rotation[1], rotation[2]
+
+    -- Apply rotation around Y-axis (Yaw)
+    rotatedX = x * cos(yaw) + z * sin(yaw)
+    rotatedZ = -x * sin(yaw) + z * cos(yaw)
+    x, z = rotatedX, rotatedZ
+
+    -- Apply rotation around X-axis (Pitch)
+    rotatedY = y * cos(pitch) - z * sin(pitch)
+    rotatedZ = y * sin(pitch) + z * cos(pitch)
+    y, z = rotatedY, rotatedZ
+
+    return {x, y, z}
+end
+
+
+
+-- Update camera position and orientation
+function onTick()
+    B1 = gb(1)
+    AD = gn(1)
+    WS = gn(2)
+    UPDOWN = gn(4)
+    MouseX = gn(9)
+    MouseY = gn(10)
+    P2YAW = gn(29)
+    P2X = gn(30)
+    P2Y = gn(31)
+    P2Z = gn(32)
+
+    -- Camera control code
+    if m.abs(MouseX) > threshold then
+        cumulativeYaw = cumulativeYaw + MouseX * sensitivity * 0.03
+    end
+
+    cameraYaw = cumulativeYaw + MouseX * sensitivity
+    cameraPitch = m.max(m.min(MouseY * sensitivity, m.rad(90)), -m.rad(90)) -- Using m.max and m.min instead of clamp
+
+	  cameraCosYaw = m.cos(cameraYaw)
+	  cameraSinYaw = m.sin(cameraYaw)
+	  cameraCosPitch = m.cos(cameraPitch)
+	  cameraSinPitch = m.sin(cameraPitch)
+    
+    -- Rotate movement vector based on camera rotation
+    rotatedMovement = rotatePoint({AD, UPDOWN, WS}, {cameraYaw, 0})
+
+    -- Update camera position
+    cameraX = cameraX + rotatedMovement[1] * speed
+    cameraY = cameraY + rotatedMovement[2] * speed
+    cameraZ = cameraZ + rotatedMovement[3] * speed
+
+    -- Update camera position variables
+    sn(29, cameraYaw)
+    sn(30, cameraX)
+    sn(31, cameraY)
+    sn(32, cameraZ)
+end
+
+-- Render the scene
+function onDraw()
+    h = s.getHeight()
+    w = s.getWidth()
+    h2 = h * 0.5
+    w2 = w * 0.5
+    aspectRatio = w / h
+    s.setColor(fog[1], fog[2], fog[3])
+    s.drawRectF(0, 0, w, h)
+
+    allProjectedTriangles = {}
+
+	-- Test projection of the model
+	
+    projectModel(cube, {2, 0, 2}, {255, 255, 100})
+    projectModel(cube, {0, 0, 0}, {255, 0, 0, 90})
+    projectModel(cube, {5, 1, 0}, {10, 255, 0, 50})
+    projectModel(mac10, {P2X, P2Y, P2Z}, {0, 44, 255},{P2YAW,0})
+	projectModel(mac10, {cameraX, cameraY, cameraZ}, {0, 44, 255},{cameraYaw,0})
+	projectModel(mac10, {0, 4, 4}, {100, 100, 100,150})
+    -- Sort triangles based on average depth
+    table.sort(allProjectedTriangles, function(a, b)
+        return a[5] > b[5]
+    end)
+
+    -- Loop through each triangle and draw it
+    for _, triangleData in ipairs(allProjectedTriangles) do
+        v1, v2, v3, color = triangleData[1], triangleData[2], triangleData[3], triangleData[4]
+
+        -- Check if all vertices of the triangle have positive depth
+        if v1[3] > 0 or v2[3] > 0 or v3[3] > 0 then
+            s.setColor(color[1], color[2], color[3], color[4])
+            s.drawTriangleF(v1[1], v1[2], v2[1], v2[2], v3[1], v3[2])
+        end
+    end
+end
+
